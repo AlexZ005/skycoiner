@@ -1,0 +1,378 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PeerJS Multiplayer Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="menu">
+        <div class="menu-container">
+            <h1>🪙</h1>
+            <h2>Sky Coiner</h2>
+            <button id="hostBtn">Host Game</button>
+            <button id="joinBtn">Join Game</button>
+            <div id="hostSection" style="display: none;">
+                <p>Your Game Code:</p>
+                <input type="text" id="hostId" readonly>
+            </div>
+            <div id="joinSection" style="display: none;">
+                <p>Enter Host Code:</p>
+                <input type="text" id="joinId" maxlength="5" placeholder="12345">
+                <button id="connectBtn">Connect</button>
+            </div>
+        </div>
+    </div>
+    <div id="game">
+        <button id="soundToggleBtn" aria-label="Toggle Sound">
+            <svg id="speakerIcon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="#333" viewBox="0 0 24 24">
+                <path d="M3 9v6h4l5 5V4L7 9H3z"/>
+                <path d="M14.5 12c0-1.77-1-3.29-2.5-4.03v8.06c1.5-.74 2.5-2.26 2.5-4.03z"/>
+                <path d="M16.5 12c0-3.04-2.36-5.5-5.25-5.5v11c2.89 0 5.25-2.46 5.25-5.5z"/>
+            </svg>
+        </button>
+        <div id="hostCodeDisplay" style="display: none;">
+            Game Code: <span id="displayCode"></span>
+        </div>
+        <div id="scoreBoard">
+            <div id="score1" class="score">Player 1: 0</div>
+            <div id="score2" class="score">Player 2: 0</div>
+        </div>
+        <div id="gameArea">
+            <div id="player1" class="player"></div>
+            <div id="player2" class="player"></div>
+            <div class="platform"></div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script>
+        const menu = document.getElementById('menu');
+        const game = document.getElementById('game');
+        const hostBtn = document.getElementById('hostBtn');
+        const joinBtn = document.getElementById('joinBtn');
+        const hostSection = document.getElementById('hostSection');
+        const joinSection = document.getElementById('joinSection');
+        const hostIdInput = document.getElementById('hostId');
+        const displayCode = document.getElementById('displayCode');
+        const joinIdInput = document.getElementById('joinId');
+        const connectBtn = document.getElementById('connectBtn');
+        const hostCodeDisplay = document.getElementById('hostCodeDisplay');
+        const score1 = document.getElementById('score1');
+        const score2 = document.getElementById('score2');
+        const player1 = document.getElementById('player1');
+        const player2 = document.getElementById('player2');
+        const gameArea = document.getElementById('gameArea');
+
+        let peer, conn;
+        let isHostPlayer = false;
+        let player = 'player1';
+        let otherPlayer = 'player2';
+        let keys = {};
+        let position = { left: 100, bottom: 50 };
+        let otherPosition = { left: 300, bottom: 50 };
+        let isJumping = false;
+        let scorePlayer1 = 0;
+        let scorePlayer2 = 0;
+        let coins = [];
+
+        let soundEnabled = true;
+
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        menu.style.display = 'flex';
+
+        hostBtn.addEventListener('click', () => {
+            hostSection.style.display = 'block';
+            joinSection.style.display = 'none';
+            const code = generateCode();
+            peer = new Peer(code, { host: '0.peerjs.com', secure: true, port: 443 });
+
+            peer.on('open', id => {
+                hostIdInput.value = id;
+                displayCode.textContent = id;
+                hostCodeDisplay.style.display = 'block';
+                menu.style.display = 'none';
+                game.style.display = 'flex';
+            });
+
+            peer.on('connection', connection => {
+                conn = connection;
+                setupGame(true);
+            });
+
+            peer.on('error', err => {
+                alert('Error: ' + err);
+            });
+        });
+
+        joinBtn.addEventListener('click', () => {
+            joinSection.style.display = 'block';
+            hostSection.style.display = 'none';
+        });
+
+        connectBtn.addEventListener('click', () => {
+            const hostCode = joinIdInput.value.trim();
+            if (hostCode.length !== 5) {
+                alert('Please enter a 5-digit code.');
+                return;
+            }
+            peer = new Peer({ host: '0.peerjs.com', secure: true, port: 443 });
+
+            peer.on('open', id => {
+                conn = peer.connect(hostCode);
+                conn.on('open', () => {
+                    setupGame(false);
+                });
+                conn.on('error', () => {
+                    alert('Connection failed. Please check the code and try again.');
+                });
+            });
+
+            peer.on('error', err => {
+                alert('Error: ' + err);
+            });
+        });
+
+        function setupGame(isHost) {
+            isHostPlayer = isHost;
+            hostCodeDisplay.style.display = 'none';
+            menu.style.display = 'none';
+            game.style.display = 'flex';
+
+            if (isHost) {
+                player = 'player1';
+                otherPlayer = 'player2';
+                spawnCoin(); // Host spawns coins
+            } else {
+                player = 'player2';
+                otherPlayer = 'player1';
+            }
+
+            if (conn) {
+                conn.on('data', data => {
+                    if (data.type === 'move') {
+                        otherPosition.left = data.left;
+                        otherPosition.bottom = data.bottom;
+                        updatePlayerPosition(document.getElementById(otherPlayer), otherPosition);
+                    }
+                    if (data.type === 'score') {
+                        scorePlayer1 = data.score1;
+                        scorePlayer2 = data.score2;
+                        updateScores();
+                    }
+                    if (data.type === 'coin') {
+                        createCoin(data.coinId, data.left); // Pass left position
+                    }
+                });
+            }
+
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('keyup', handleKeyUp);
+            requestAnimationFrame(gameLoop);
+        }
+
+        function handleKeyDown(e) {
+            keys[e.code] = true;
+        }
+
+        function handleKeyUp(e) {
+            keys[e.code] = false;
+        }
+
+        function gameLoop() {
+            let moved = false;
+            if (isHostPlayer) {
+                if (keys['KeyA']) {
+                    position.left -= 5;
+                    moved = true;
+                }
+                if (keys['KeyD']) {
+                    position.left += 5;
+                    moved = true;
+                }
+                if (keys['KeyW']) {
+                    position.bottom += 5;
+                    moved = true;
+                }
+                if (keys['Space'] && !isJumping) {
+                    isJumping = true;
+                    let jumpHeight = 0;
+                    let jumpInterval = setInterval(() => {
+                        if (jumpHeight < 50) {
+                            position.bottom += 5;
+                            jumpHeight += 5;
+                        } else {
+                            position.bottom -= 5;
+                            jumpHeight -= 5;
+                            if (jumpHeight === 0) {
+                                clearInterval(jumpInterval);
+                                isJumping = false;
+                            }
+                        }
+                        updatePlayerPosition(player1, position);
+                        sendMove();
+                    }, 30);
+                }
+                if (moved) {
+                    updatePlayerPosition(player1, position);
+                    sendMove();
+                }
+            } else {
+                if (keys['KeyA']) {
+                    position.left -= 5;
+                    moved = true;
+                }
+                if (keys['KeyD']) {
+                    position.left += 5;
+                    moved = true;
+                }
+                if (keys['KeyW']) {
+                    position.bottom += 5;
+                    moved = true;
+                }
+                if (keys['Space'] && !isJumping) {
+                    isJumping = true;
+                    let jumpHeight = 0;
+                    let jumpInterval = setInterval(() => {
+                        if (jumpHeight < 50) {
+                            position.bottom += 5;
+                            jumpHeight += 5;
+                        } else {
+                            position.bottom -= 5;
+                            jumpHeight -= 5;
+                            if (jumpHeight === 0) {
+                                clearInterval(jumpInterval);
+                                isJumping = false;
+                            }
+                        }
+                        updatePlayerPosition(player2, position);
+                        sendMove();
+                    }, 30);
+                }
+                if (moved) {
+                    updatePlayerPosition(player2, position);
+                    sendMove();
+                }
+            }
+
+            checkCoinCollision();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updatePlayerPosition(element, pos) {
+            element.style.left = pos.left + 'px';
+            element.style.bottom = pos.bottom + 'px';
+        }
+
+        function sendMove() {
+            if (conn && conn.open) {
+                conn.send({ type: 'move', left: position.left, bottom: position.bottom });
+            }
+        }
+
+        function generateCode() {
+            let code = '';
+            for (let i = 0; i < 5; i++) {
+                code += Math.floor(Math.random() * 10).toString();
+            }
+            return code;
+        }
+
+        function spawnCoin() {
+            const coinId = Date.now();
+            const leftPosition = Math.random() * (gameArea.clientWidth - 30); // Generate left position
+
+            if (conn && conn.open) {
+                conn.send({ type: 'coin', coinId: coinId, left: leftPosition }); // Send coin data to peer
+            }
+
+            createCoin(coinId, leftPosition); // Create coin on host side
+
+            setTimeout(spawnCoin, Math.random() * 2000 + 1000);
+        }
+
+        function createCoin(id, leftPosition) { // Accept leftPosition
+            const coin = document.createElement('div');
+            coin.classList.add('coin');
+            coin.id = `coin-${id}`;
+            coin.style.left = leftPosition + 'px'; // Set left position
+            gameArea.appendChild(coin);
+            coins.push(coin);
+        }
+
+        function checkCoinCollision() {
+            const currentPlayer = document.getElementById(player);
+            const playerRect = currentPlayer.getBoundingClientRect();
+            coins.forEach(coin => {
+                const coinRect = coin.getBoundingClientRect();
+                if (
+                    coinRect.left < playerRect.left + playerRect.width &&
+                    coinRect.left + coinRect.width > playerRect.left &&
+                    coinRect.top < playerRect.top + playerRect.height &&
+                    coinRect.top + coinRect.height > playerRect.top
+                ) {
+                    collectCoin(coin.id);
+                }
+            });
+        }
+
+        function collectCoin(id) {
+            const coin = document.getElementById(id);
+            if (coin) {
+                coin.remove();
+                coins = coins.filter(c => c.id !== id);
+                if (player === 'player1') {
+                    scorePlayer1 += 1;
+
+                    // Play the "ta" part
+                    playNote(246.09, 0, 0.05);  // B3
+                    playNote(329.63, 0.05, 0.05);  // E4
+
+                    // Play the "da" part
+                    playNote(392.00, 0.1, 0.15);  // G4
+                    playNote(493.88, 0.1, 0.15);  // C5
+
+                } else {
+                    scorePlayer2 += 1;
+                }
+                updateScores();
+                sendScore();
+            }
+        }
+
+        function updateScores() {
+            score1.textContent = `Player 1 (Red): ${scorePlayer1}`;
+            score2.textContent = `Player 2 (Blue): ${scorePlayer2}`;
+        }
+
+        function sendScore() {
+            if (conn && conn.open) {
+                conn.send({ type: 'score', score1: scorePlayer1, score2: scorePlayer2 });
+            }
+        }
+
+        function playNote(frequency, startTime, duration) {
+            if (!soundEnabled) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = 'square'; // 8-bit sound style
+            oscillator.frequency.value = frequency;
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start(audioCtx.currentTime + startTime);
+            oscillator.stop(audioCtx.currentTime + startTime + duration);
+        }
+
+        const soundToggleBtn = document.getElementById('soundToggleBtn');
+        const speakerIcon = document.getElementById('speakerIcon');
+
+        soundToggleBtn.addEventListener('click', () => {
+            soundEnabled = !soundEnabled;
+            soundToggleBtn.classList.toggle('crossed', !soundEnabled);
+        });
+    </script>
+</body>
+</html>
